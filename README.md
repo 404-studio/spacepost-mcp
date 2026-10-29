@@ -2,6 +2,8 @@
 
 # @spacepost/mcp
 
+<a href="https://glama.ai/mcp/servers/404-studio/spacepost-mcp"><img width="380" height="200" src="https://glama.ai/mcp/servers/404-studio/spacepost-mcp/badge" alt="SpacePost MCP server on Glama" /></a>
+
 An [MCP](https://modelcontextprotocol.io) server that gives AI assistants the whole SpacePost API: one tool per endpoint of the
 [API reference](https://docs.spacepost.dev/api-reference/), generated from the OpenAPI document. New API features become MCP
 tools automatically. Docs: https://docs.spacepost.dev/tools/mcp/
