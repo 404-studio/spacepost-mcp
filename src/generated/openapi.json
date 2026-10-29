@@ -1,0 +1,4422 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "SpacePost API",
+    "version": "1.0.0",
+    "summary": "Resend-compatible email API on Amazon SES.",
+    "description": "The SpacePost API is a drop-in replacement for the Resend API: same paths, request fields, response shapes and error format.\nTo migrate, change the base URL (`RESEND_BASE_URL=https://api.spacepost.dev`, or `new Resend(key, { baseUrl })`) or swap the SDK import.\nThe official `resend` npm SDK works unchanged.\n\n## Platform mode (tenants)\nIf you send on behalf of your own customers, create a tenant for each with `POST /tenants`. Each tenant has its own SES tenant\n(isolated reputation), its own bounce/complaint guard, a pause switch and an optional daily cap. `tenant_id` (our id or your\n`external_id`) is optional on `POST /emails`, `POST /emails/batch` items and `POST /domains`. An email from a tenant-owned domain\nis attributed to that tenant automatically; a team-level domain may send on behalf of any tenant. Emails, domains and webhook\npayloads carry `tenant_id`.\n\n## Authentication\nSend your API key as a bearer token: `Authorization: Bearer sp_live_...`. Keys come in two flavours:\n\n- `full_access` can use every endpoint.\n- `sending_access` can only send emails (`POST /emails`, `POST /emails/batch`), optionally from a single domain.\n  Any other endpoint answers `401 restricted_api_key`.\n\n## Errors\nEvery error has the same shape: `{ \"statusCode\": 422, \"name\": \"validation_error\", \"message\": \"...\" }`.\n\n## Idempotency\n`POST /emails` and `POST /emails/batch` accept an `Idempotency-Key` header (1 to 256 characters, kept for 24 hours). Repeating\na request with the same key and body returns the original response. Reusing a key with a different body is a `409`.\n\n## Rate limits\nEach team may make 10 requests per second (25 on Scale). Responses carry `ratelimit-limit`, `ratelimit-remaining` and\n`ratelimit-reset`; when exceeded the API answers `429 rate_limit_exceeded` with a `retry-after` header.\n\n## Pagination\nList endpoints return `{ \"object\": \"list\", \"has_more\": true, \"data\": [...] }`, newest first. Use `limit` (1 to 100, default 20)\nand `after=<id>` for the next (older) page or `before=<id>` for the previous (newer) page. `after` and `before` cannot be combined.\n\n## MCP\nEvery operation in this reference is also an MCP tool for AI agents, named after its `operationId` in snake_case\n(`sendEmail` → `send_email`). Connect to the hosted MCP server at `https://api.spacepost.dev/mcp` (Streamable HTTP) with the\nsame `Authorization: Bearer sp_live_...` header (local options: https://docs.spacepost.dev/tools/mcp/). The same key\npermissions, rate limits and idempotency rules apply. `x-mcp` and `x-permission` on an operation are hints for these tools.\n",
+    "license": {
+      "name": "Proprietary",
+      "identifier": "LicenseRef-Proprietary"
+    },
+    "contact": {
+      "name": "SpacePost support",
+      "email": "support@spacepost.dev"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://api.spacepost.dev",
+      "description": "Production"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "Emails",
+      "description": "Send, schedule, retrieve and cancel emails."
+    },
+    {
+      "name": "Domains",
+      "description": "Sending domains with Easy DKIM and a custom MAIL FROM subdomain. A domain must be verified before you can send from it."
+    },
+    {
+      "name": "API Keys",
+      "description": "Create and revoke API keys. The token is shown once, only a hash is stored."
+    },
+    {
+      "name": "Webhooks",
+      "description": "Receive email events at your endpoint. Payloads are signed with Standard Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature`; Svix compatible)."
+    },
+    {
+      "name": "Audiences",
+      "description": "Lists of contacts that broadcasts are sent to."
+    },
+    {
+      "name": "Contacts",
+      "description": "Contacts inside an audience. Endpoints accept a contact id or an email address."
+    },
+    {
+      "name": "Broadcasts",
+      "description": "Send one email to a whole audience, now or scheduled. Supports `{{{FIRST_NAME}}}`, `{{{LAST_NAME}}}` and `{{{RESEND_UNSUBSCRIBE_URL}}}` placeholders and one-click unsubscribe (RFC 8058)."
+    },
+    {
+      "name": "Suppressions",
+      "description": "Addresses that are never sent to. Hard bounces and complaints are added automatically."
+    },
+    {
+      "name": "Tenants",
+      "description": "Platform mode. Your own customers, each with isolated reputation, a pause switch and an optional daily cap. Requires a `full_access` key. `{ref}` is our id or your `external_id`."
+    }
+  ],
+  "paths": {
+    "/emails": {
+      "post": {
+        "tags": [
+          "Emails"
+        ],
+        "operationId": "sendEmail",
+        "x-permission": "sending_access",
+        "x-mcp": {
+          "openWorld": true
+        },
+        "summary": "Send an email",
+        "description": "Validates and queues one email. Each recipient counts towards your quota. Use `scheduled_at` to send later (up to 30 days ahead). Pass `tenant_id` to send on behalf of a tenant (not needed when the `from` domain belongs to one). Fails with `422` if `tenant_id` conflicts with the domain's tenant, `403 sending_paused` if the tenant is paused and `429 daily_quota_exceeded` if it reached its daily cap.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendEmailRequest"
+              },
+              "examples": {
+                "simple": {
+                  "summary": "HTML email",
+                  "value": {
+                    "from": "Acme <onboarding@acme.com>",
+                    "to": [
+                      "delivered@test.spacepost.dev"
+                    ],
+                    "subject": "Welcome to Acme",
+                    "html": "<p>Thanks for signing up!</p>"
+                  }
+                },
+                "scheduled": {
+                  "summary": "Scheduled with tags",
+                  "value": {
+                    "from": "Acme <onboarding@acme.com>",
+                    "to": "user@example.com",
+                    "subject": "Your trial ends soon",
+                    "text": "Your trial ends in 3 days.",
+                    "scheduled_at": "in 1 hour",
+                    "tags": [
+                      {
+                        "name": "category",
+                        "value": "trial"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The email was accepted.",
+            "headers": {
+              "ratelimit-limit": {
+                "$ref": "#/components/headers/RateLimitLimit"
+              },
+              "ratelimit-remaining": {
+                "$ref": "#/components/headers/RateLimitRemaining"
+              },
+              "ratelimit-reset": {
+                "$ref": "#/components/headers/RateLimitReset"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdResponse"
+                },
+                "example": {
+                  "id": "0198a1c2-7b3e-7a41-9d52-5f6c1e0b8a11"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Emails"
+        ],
+        "operationId": "listEmails",
+        "summary": "List emails",
+        "description": "Returns sent and scheduled emails, newest first, without bodies.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/After"
+          },
+          {
+            "$ref": "#/components/parameters/Before"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of emails.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/emails/batch": {
+      "post": {
+        "tags": [
+          "Emails"
+        ],
+        "operationId": "sendBatchEmails",
+        "x-permission": "sending_access",
+        "x-mcp": {
+          "openWorld": true
+        },
+        "summary": "Send batch emails",
+        "description": "Sends up to 100 emails in one call. All-or-nothing, if any email is invalid none are sent. Attachments, `scheduled_at` and a per-email `tenant_id` are supported; the paused-tenant and tenant-cap errors apply to the whole batch.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100,
+                "items": {
+                  "$ref": "#/components/schemas/SendEmailRequest"
+                }
+              },
+              "example": [
+                {
+                  "from": "Acme <hello@acme.com>",
+                  "to": [
+                    "a@example.com"
+                  ],
+                  "subject": "Hello A",
+                  "text": "Hi A"
+                },
+                {
+                  "from": "Acme <hello@acme.com>",
+                  "to": [
+                    "b@example.com"
+                  ],
+                  "subject": "Hello B",
+                  "text": "Hi B"
+                }
+              ]
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "All emails were accepted, ids are in input order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/IdResponse"
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "data": [
+                    {
+                      "id": "0198a1c2-7b3e-7a41-9d52-5f6c1e0b8a11"
+                    },
+                    {
+                      "id": "0198a1c2-7b3f-7c02-8e13-2a9d4b7c6e22"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/emails/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/EmailId"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Emails"
+        ],
+        "operationId": "getEmail",
+        "summary": "Retrieve an email",
+        "responses": {
+          "200": {
+            "description": "The email.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Email"
+                },
+                "example": {
+                  "object": "email",
+                  "id": "0198a1c2-7b3e-7a41-9d52-5f6c1e0b8a11",
+                  "to": [
+                    "user@example.com"
+                  ],
+                  "from": "Acme <onboarding@acme.com>",
+                  "created_at": "2026-10-23T09:12:44.120Z",
+                  "subject": "Welcome to Acme",
+                  "html": "<p>Thanks for signing up!</p>",
+                  "text": null,
+                  "bcc": null,
+                  "cc": null,
+                  "reply_to": null,
+                  "last_event": "delivered",
+                  "scheduled_at": null,
+                  "tags": []
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Emails"
+        ],
+        "operationId": "updateEmail",
+        "summary": "Reschedule an email",
+        "description": "Changes `scheduled_at` of an email that is still `scheduled`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "scheduled_at"
+                ],
+                "properties": {
+                  "scheduled_at": {
+                    "$ref": "#/components/schemas/ScheduledAt"
+                  }
+                }
+              },
+              "example": {
+                "scheduled_at": "in 2 hours"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Rescheduled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectRef"
+                },
+                "example": {
+                  "object": "email",
+                  "id": "0198a1c2-7b3e-7a41-9d52-5f6c1e0b8a11"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/emails/{id}/cancel": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/EmailId"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Emails"
+        ],
+        "operationId": "cancelEmail",
+        "x-mcp": {
+          "destructive": true,
+          "idempotent": true
+        },
+        "summary": "Cancel a scheduled email",
+        "responses": {
+          "200": {
+            "description": "Canceled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectRef"
+                },
+                "example": {
+                  "object": "email",
+                  "id": "0198a1c2-7b3e-7a41-9d52-5f6c1e0b8a11"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/domains": {
+      "post": {
+        "tags": [
+          "Domains"
+        ],
+        "operationId": "createDomain",
+        "summary": "Create a domain",
+        "description": "Registers a domain and returns the DNS records to add (three DKIM CNAMEs, plus MX and SPF on the MAIL FROM subdomain).\nDomain names are globally unique. The number of domains is limited by your plan (Free 3, Pro 10, Scale 1,000).\n",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDomainRequest"
+              },
+              "example": {
+                "name": "acme.com",
+                "region": "eu-central-1",
+                "custom_return_path": "send"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The domain with its DNS records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainWithRecords"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Domains"
+        ],
+        "operationId": "listDomains",
+        "summary": "List domains",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/After"
+          },
+          {
+            "$ref": "#/components/parameters/Before"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of domains (without DNS records).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/domains/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ResourceId"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Domains"
+        ],
+        "operationId": "getDomain",
+        "summary": "Retrieve a domain",
+        "responses": {
+          "200": {
+            "description": "The domain with its DNS records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainWithRecords"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Domains"
+        ],
+        "operationId": "updateDomain",
+        "summary": "Update a domain",
+        "description": "Toggles open and click tracking.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDomainRequest"
+              },
+              "example": {
+                "open_tracking": true,
+                "click_tracking": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectRef"
+                },
+                "example": {
+                  "object": "domain",
+                  "id": "0198a1c2-7b3e-7a41-9d52-5f6c1e0b8a11"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Domains"
+        ],
+        "operationId": "deleteDomain",
+        "summary": "Delete a domain",
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deleted"
+                },
+                "example": {
+                  "object": "domain",
+                  "id": "0198a1c2-7b3e-7a41-9d52-5f6c1e0b8a11",
+                  "deleted": true
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/domains/{id}/verify": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ResourceId"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Domains"
+        ],
+        "operationId": "verifyDomain",
+        "x-mcp": {
+          "idempotent": true
+        },
+        "summary": "Verify a domain",
+        "description": "Re-checks DNS now. Retrieve the domain afterwards to read the new `status` and per-record statuses.",
+        "responses": {
+          "200": {
+            "description": "The check was run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectRef"
+                },
+                "example": {
+                  "object": "domain",
+                  "id": "0198a1c2-7b3e-7a41-9d52-5f6c1e0b8a11"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api-keys": {
+      "post": {
+        "tags": [
+          "API Keys"
+        ],
+        "operationId": "createApiKey",
+        "summary": "Create an API key",
+        "description": "The `token` is returned only in this response.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApiKeyRequest"
+              },
+              "example": {
+                "name": "Production",
+                "permission": "sending_access",
+                "domain_id": "0198a1c2-7b3e-7a41-9d52-5f6c1e0b8a11"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The new key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "token"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "token": {
+                      "type": "string",
+                      "description": "The secret key. Store it now",
+                      "it cannot be retrieved later.": null
+                    }
+                  }
+                },
+                "example": {
+                  "id": "0198a1c2-7b3e-7a41-9d52-5f6c1e0b8a11",
+                  "token": "sp_live_Kj3nF8s0QpWm2VtYd9LxHb7RcEa4UgZi"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "API Keys"
+        ],
+        "operationId": "listApiKeys",
+        "summary": "List API keys",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/After"
+          },
+          {
+            "$ref": "#/components/parameters/Before"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of keys. Tokens are never included.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api-keys/{id}": {
+      "delete": {
+        "tags": [
+          "API Keys"
+        ],
+        "operationId": "deleteApiKey",
+        "summary": "Delete an API key",
+        "description": "The key stops working immediately. The response body is an empty object.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ResourceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false
+                },
+                "example": {}
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/webhooks": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "operationId": "createWebhook",
+        "summary": "Create a webhook",
+        "description": "In production the endpoint must use https and resolve to a public address.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWebhookRequest"
+              },
+              "example": {
+                "endpoint": "https://example.com/webhooks/spacepost",
+                "events": [
+                  "email.delivered",
+                  "email.bounced"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The webhook including its signing secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookWithSecret"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Webhooks"
+        ],
+        "operationId": "listWebhooks",
+        "summary": "List webhooks",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/After"
+          },
+          {
+            "$ref": "#/components/parameters/Before"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of webhooks (without secrets).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/webhooks/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ResourceId"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Webhooks"
+        ],
+        "operationId": "getWebhook",
+        "summary": "Retrieve a webhook",
+        "responses": {
+          "200": {
+            "description": "The webhook including its signing secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookWithSecret"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Webhooks"
+        ],
+        "operationId": "updateWebhook",
+        "summary": "Update a webhook",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWebhookRequest"
+              },
+              "example": {
+                "status": "disabled"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated webhook.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookWithSecret"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Webhooks"
+        ],
+        "operationId": "deleteWebhook",
+        "summary": "Delete a webhook",
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deleted"
+                },
+                "example": {
+                  "object": "webhook",
+                  "id": "0198a1c2-7b3e-7a41-9d52-5f6c1e0b8a11",
+                  "deleted": true
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/audiences": {
+      "post": {
+        "tags": [
+          "Audiences"
+        ],
+        "operationId": "createAudience",
+        "summary": "Create an audience",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  }
+                }
+              },
+              "example": {
+                "name": "Newsletter"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The audience.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "object",
+                    "id",
+                    "name"
+                  ],
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "const": "audience"
+                    },
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "example": {
+                  "object": "audience",
+                  "id": "0198a1c2-7b3e-7a41-9d52-5f6c1e0b8a11",
+                  "name": "Newsletter"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Audiences"
+        ],
+        "operationId": "listAudiences",
+        "summary": "List audiences",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/After"
+          },
+          {
+            "$ref": "#/components/parameters/Before"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of audiences.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/audiences/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ResourceId"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Audiences"
+        ],
+        "operationId": "getAudience",
+        "summary": "Retrieve an audience",
+        "responses": {
+          "200": {
+            "description": "The audience.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Audience"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Audiences"
+        ],
+        "operationId": "deleteAudience",
+        "summary": "Delete an audience",
+        "description": "Also deletes its contacts.",
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deleted"
+                },
+                "example": {
+                  "object": "audience",
+                  "id": "0198a1c2-7b3e-7a41-9d52-5f6c1e0b8a11",
+                  "deleted": true
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/audiences/{audienceId}/contacts": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/AudienceId"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Contacts"
+        ],
+        "operationId": "createContact",
+        "summary": "Create a contact",
+        "description": "Emails are lower-cased. An address can only appear once per audience.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateContactRequest"
+              },
+              "example": {
+                "email": "jane@example.com",
+                "first_name": "Jane",
+                "last_name": "Doe",
+                "unsubscribed": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectRef"
+                },
+                "example": {
+                  "object": "contact",
+                  "id": "0198a1c2-7b3e-7a41-9d52-5f6c1e0b8a11"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Contacts"
+        ],
+        "operationId": "listContacts",
+        "summary": "List contacts",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/After"
+          },
+          {
+            "$ref": "#/components/parameters/Before"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of contacts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/audiences/{audienceId}/contacts/{idOrEmail}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/AudienceId"
+        },
+        {
+          "name": "idOrEmail",
+          "in": "path",
+          "required": true,
+          "description": "The contact id or its (URL-encoded) email address.",
+          "schema": {
+            "type": "string"
+          },
+          "example": "jane@example.com"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Contacts"
+        ],
+        "operationId": "getContact",
+        "summary": "Retrieve a contact",
+        "responses": {
+          "200": {
+            "description": "The contact.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Contact"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Contacts"
+        ],
+        "operationId": "updateContact",
+        "summary": "Update a contact",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateContactRequest"
+              },
+              "example": {
+                "unsubscribed": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectRef"
+                },
+                "example": {
+                  "object": "contact",
+                  "id": "0198a1c2-7b3e-7a41-9d52-5f6c1e0b8a11"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Contacts"
+        ],
+        "operationId": "deleteContact",
+        "summary": "Delete a contact",
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "object",
+                    "contact",
+                    "deleted"
+                  ],
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "const": "contact"
+                    },
+                    "contact": {
+                      "type": "string",
+                      "description": "The deleted contact's email address."
+                    },
+                    "deleted": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  }
+                },
+                "example": {
+                  "object": "contact",
+                  "contact": "jane@example.com",
+                  "deleted": true
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/broadcasts": {
+      "post": {
+        "tags": [
+          "Broadcasts"
+        ],
+        "operationId": "createBroadcast",
+        "summary": "Create a broadcast",
+        "description": "Creates a draft. The `from` address must belong to a verified domain of your team and `audience_id` to one of your audiences.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBroadcastRequest"
+              },
+              "example": {
+                "audience_id": "0198a1c2-7b3e-7a41-9d52-5f6c1e0b8a11",
+                "from": "Acme <news@acme.com>",
+                "subject": "October update",
+                "html": "<p>Hi {{{FIRST_NAME}}}, here is what is new.</p><p><a href=\"{{{RESEND_UNSUBSCRIBE_URL}}}\">Unsubscribe</a></p>"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The draft was created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Broadcasts"
+        ],
+        "operationId": "listBroadcasts",
+        "summary": "List broadcasts",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/After"
+          },
+          {
+            "$ref": "#/components/parameters/Before"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of broadcasts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BroadcastList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/broadcasts/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ResourceId"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Broadcasts"
+        ],
+        "operationId": "getBroadcast",
+        "summary": "Retrieve a broadcast",
+        "responses": {
+          "200": {
+            "description": "The broadcast.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Broadcast"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Broadcasts"
+        ],
+        "operationId": "updateBroadcast",
+        "summary": "Update a broadcast",
+        "description": "Only drafts can be updated.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateBroadcastRequest"
+              },
+              "example": {
+                "subject": "October update (final)"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Broadcasts"
+        ],
+        "operationId": "deleteBroadcast",
+        "summary": "Delete a broadcast",
+        "description": "Only drafts and broadcasts that are scheduled for the future can be deleted.",
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deleted"
+                },
+                "example": {
+                  "object": "broadcast",
+                  "id": "0198a1c2-7b3e-7a41-9d52-5f6c1e0b8a11",
+                  "deleted": true
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/broadcasts/{id}/readiness": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ResourceId"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Broadcasts"
+        ],
+        "operationId": "getBroadcastReadiness",
+        "summary": "Check a broadcast before sending",
+        "description": "SpacePost extension (not part of Resend). Returns a deliverability checklist: sender domain and DMARC, subject, Gmail\nclipping (HTML over 102 KB), image-heavy bodies, link shorteners, spam phrases, unsubscribe link and audience quality.\n`ready` is false when any check has level `error`; `POST /broadcasts/{id}/send` is then refused with `validation_error`.\nWarnings never block a send.\n",
+        "responses": {
+          "200": {
+            "description": "The checklist.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ready",
+                    "checks"
+                  ],
+                  "properties": {
+                    "ready": {
+                      "type": "boolean"
+                    },
+                    "checks": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "level",
+                          "title",
+                          "detail"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "example": "html_size"
+                          },
+                          "level": {
+                            "type": "string",
+                            "enum": [
+                              "error",
+                              "warn",
+                              "ok"
+                            ]
+                          },
+                          "title": {
+                            "type": "string",
+                            "example": "Gmail will clip this message"
+                          },
+                          "detail": {
+                            "type": "string"
+                          },
+                          "code": {
+                            "type": "string",
+                            "example": "html_size.clipped",
+                            "description": "Stable identifier of the exact message, for localizing it client-side."
+                          },
+                          "params": {
+                            "type": "object",
+                            "additionalProperties": true,
+                            "description": "Values interpolated into title and detail."
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "ready": true,
+                  "checks": [
+                    {
+                      "id": "sender_domain",
+                      "level": "ok",
+                      "title": "Sender domain verified",
+                      "detail": "acme.com is verified."
+                    },
+                    {
+                      "id": "html_size",
+                      "level": "warn",
+                      "title": "Gmail will clip this message",
+                      "detail": "The HTML is 140 KB; Gmail clips messages over 102 KB and hides the rest, including the unsubscribe footer."
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/broadcasts/{id}/send": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ResourceId"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Broadcasts"
+        ],
+        "operationId": "sendBroadcast",
+        "x-mcp": {
+          "openWorld": true
+        },
+        "summary": "Send or schedule a broadcast",
+        "description": "Queues a draft for delivery to every subscribed contact of its audience. The broadcast needs `html` or `text`.\nWithout `scheduled_at` it starts immediately; the status becomes `queued`, then `sending` and `sent`.\n",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "scheduled_at": {
+                    "$ref": "#/components/schemas/ScheduledAt"
+                  }
+                }
+              },
+              "example": {
+                "scheduled_at": "2026-10-30T09:00:00Z"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/suppressions": {
+      "get": {
+        "tags": [
+          "Suppressions"
+        ],
+        "operationId": "listSuppressions",
+        "summary": "List suppressions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/After"
+          },
+          {
+            "$ref": "#/components/parameters/Before"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of suppressions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuppressionList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Suppressions"
+        ],
+        "operationId": "createSuppression",
+        "summary": "Add a suppression",
+        "description": "Adds the address with reason `manual`. Adding an address that is already suppressed returns the existing entry.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "email"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  }
+                }
+              },
+              "example": {
+                "email": "bounced@example.com"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The suppression.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Suppression"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/suppressions/{idOrEmail}": {
+      "delete": {
+        "tags": [
+          "Suppressions"
+        ],
+        "operationId": "deleteSuppression",
+        "summary": "Remove a suppression",
+        "parameters": [
+          {
+            "name": "idOrEmail",
+            "in": "path",
+            "required": true,
+            "description": "The suppression id or the (URL-encoded) email address.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "bounced@example.com"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Removed. The address can receive email again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "object",
+                    "id",
+                    "email",
+                    "deleted"
+                  ],
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "const": "suppression"
+                    },
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "email": {
+                      "type": "string"
+                    },
+                    "deleted": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  }
+                },
+                "example": {
+                  "object": "suppression",
+                  "id": "0198a1c2-7b3e-7a41-9d52-5f6c1e0b8a11",
+                  "email": "bounced@example.com",
+                  "deleted": true
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/tenants": {
+      "post": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "createTenant",
+        "summary": "Create a tenant",
+        "description": "Creates one of your customers, with its own SES tenant (isolated reputation). `external_id` must be unique within your account.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTenantRequest"
+              },
+              "example": {
+                "name": "Acme Inc",
+                "external_id": "cust_123",
+                "daily_limit": 500
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The tenant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tenant"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "listTenants",
+        "summary": "List tenants",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/After"
+          },
+          {
+            "$ref": "#/components/parameters/Before"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of tenants.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/tenants/{ref}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/TenantRef"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "getTenant",
+        "summary": "Retrieve a tenant",
+        "responses": {
+          "200": {
+            "description": "The tenant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tenant"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "updateTenant",
+        "summary": "Update a tenant",
+        "description": "Changes the name, `external_id` or `daily_limit` (`null` removes the cap).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTenantRequest"
+              },
+              "example": {
+                "daily_limit": 1000
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated tenant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tenant"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "deleteTenant",
+        "summary": "Delete a tenant",
+        "description": "Fails with `422` while the tenant still has domains; delete those first.",
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "object",
+                    "id",
+                    "deleted"
+                  ],
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "const": "tenant"
+                    },
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "deleted": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  }
+                },
+                "example": {
+                  "object": "tenant",
+                  "id": "0198a1c2-7b3e-7a41-9d52-5f6c1e0b8a11",
+                  "deleted": true
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/tenants/{ref}/pause": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/TenantRef"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "pauseTenant",
+        "x-mcp": {
+          "destructive": true,
+          "idempotent": true
+        },
+        "summary": "Pause a tenant",
+        "description": "Stops all sending for the tenant. Sends return `403 sending_paused`; emails already queued fail. The body is optional.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 300,
+                    "description": "Stored as `paused_reason`. Defaults to a generic reason."
+                  }
+                }
+              },
+              "example": {
+                "reason": "Investigating spam reports"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The paused tenant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tenant"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/tenants/{ref}/unpause": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/TenantRef"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Tenants"
+        ],
+        "operationId": "unpauseTenant",
+        "x-mcp": {
+          "idempotent": true
+        },
+        "summary": "Unpause a tenant",
+        "description": "Resumes sending. A tenant that was paused by the reputation guard (bounce or complaint rate) can only be unpaused by a\n`trusted` or `internal` team; others get `403 invalid_access` and should contact support.\n",
+        "responses": {
+          "200": {
+            "description": "The active tenant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tenant"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {
+    "emailEvent": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "operationId": "receiveEmailEvent",
+        "summary": "Email event",
+        "description": "SpacePost POSTs this payload to your webhook endpoint for every subscribed event. The shape is identical to Resend's.\nVerify the Standard Webhooks signature headers (`webhook-id`, `webhook-timestamp`, `webhook-signature`) against the raw body.\nRespond with any 2xx status.\n",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Acknowledged."
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "sp_live_...",
+        "description": "Your API key, e.g. `Authorization: Bearer sp_live_...`."
+      }
+    },
+    "headers": {
+      "RateLimitLimit": {
+        "description": "Requests allowed per second for your team.",
+        "schema": {
+          "type": "integer",
+          "examples": [
+            10
+          ]
+        }
+      },
+      "RateLimitRemaining": {
+        "description": "Requests left in the current one-second window.",
+        "schema": {
+          "type": "integer",
+          "examples": [
+            9
+          ]
+        }
+      },
+      "RateLimitReset": {
+        "description": "Seconds until the window resets.",
+        "schema": {
+          "type": "integer",
+          "examples": [
+            1
+          ]
+        }
+      },
+      "RetryAfter": {
+        "description": "Seconds to wait before retrying.",
+        "schema": {
+          "type": "integer",
+          "examples": [
+            1
+          ]
+        }
+      }
+    },
+    "parameters": {
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": false,
+        "description": "A unique key (1 to 256 characters) that makes the request safe to retry for 24 hours.",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "example": "welcome-user-4821"
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "description": "Number of items to return.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 20
+        }
+      },
+      "After": {
+        "name": "after",
+        "in": "query",
+        "description": "Return items older than this id (next page). Cannot be combined with `before`.",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "Before": {
+        "name": "before",
+        "in": "query",
+        "description": "Return items newer than this id (previous page). Cannot be combined with `after`.",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "EmailId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "The email id.",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "ResourceId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "TenantRef": {
+        "name": "ref",
+        "in": "path",
+        "required": true,
+        "description": "The tenant id or your own `external_id`.",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "example": "cust_123"
+      },
+      "AudienceId": {
+        "name": "audienceId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "An error. Common statuses: 400 `invalid_idempotency_key`; 401 `missing_api_key` or `restricted_api_key`; 403 `invalid_api_key`,\n`invalid_from_address`, `sending_paused` (team or tenant) or `invalid_access`; 404 `not_found`; 409 `invalid_idempotent_request` or `concurrent_idempotent_requests`;\n422 `validation_error` (also: `tenant_id` conflicts with the domain's tenant; deleting a tenant that still has domains); 429 quota errors.\n",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "examples": {
+              "validation": {
+                "value": {
+                  "statusCode": 422,
+                  "name": "validation_error",
+                  "message": "`subject`: Invalid input: expected string, received undefined"
+                }
+              },
+              "notFound": {
+                "value": {
+                  "statusCode": 404,
+                  "name": "not_found",
+                  "message": "Email not found"
+                }
+              },
+              "missingKey": {
+                "value": {
+                  "statusCode": 401,
+                  "name": "missing_api_key",
+                  "message": "Missing API key in the authorization header. Include `Authorization: Bearer sp_live_...`."
+                }
+              }
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Too many requests (`rate_limit_exceeded`), or a daily or monthly sending quota was reached (`daily_quota_exceeded` also means a tenant's `daily_limit`).",
+        "headers": {
+          "retry-after": {
+            "$ref": "#/components/headers/RetryAfter"
+          },
+          "ratelimit-limit": {
+            "$ref": "#/components/headers/RateLimitLimit"
+          },
+          "ratelimit-remaining": {
+            "$ref": "#/components/headers/RateLimitRemaining"
+          },
+          "ratelimit-reset": {
+            "$ref": "#/components/headers/RateLimitReset"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "statusCode": 429,
+              "name": "rate_limit_exceeded",
+              "message": "Too many requests. You can only make 10 requests per second."
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": [
+          "statusCode",
+          "name",
+          "message"
+        ],
+        "properties": {
+          "statusCode": {
+            "type": "integer",
+            "examples": [
+              422
+            ]
+          },
+          "name": {
+            "type": "string",
+            "description": "Machine-readable error name.\n\n- `missing_api_key` (401): no bearer token.\n- `invalid_api_key` (403): unknown or malformed key.\n- `restricted_api_key` (401): the key is `sending_access` (or limited to another domain).\n- `validation_error` (422): invalid request. Also used with 403 for plan limits and test-domain restrictions.\n- `not_found` (404): the resource does not exist or belongs to another team.\n- `method_not_allowed` (405)\n- `invalid_idempotency_key` (400): key length outside 1 to 256.\n- `concurrent_idempotent_requests` (409): the original request is still running.\n- `invalid_idempotent_request` (409): the key was used with a different payload.\n- `rate_limit_exceeded` (429)\n- `daily_quota_exceeded` (429): the sandbox, daily limit or a tenant's `daily_limit` was reached.\n- `monthly_quota_exceeded` (429): the plan's monthly limit was reached (Free plan).\n- `invalid_from_address` (403): the sender domain is not verified.\n- `invalid_access` (422; 403 when a team that is not trusted tries to unpause a tenant paused for its bounce or complaint rate)\n- `invalid_parameter` (422)\n- `sending_paused` (403): sending is paused for the team, or for the tenant named by `tenant_id`, after a bounce or complaint spike or a manual pause.\n- `security_error` (451)\n- `application_error` (500)\n- `internal_server_error` (500)\n",
+            "enum": [
+              "missing_api_key",
+              "invalid_api_key",
+              "restricted_api_key",
+              "validation_error",
+              "not_found",
+              "method_not_allowed",
+              "invalid_idempotency_key",
+              "concurrent_idempotent_requests",
+              "invalid_idempotent_request",
+              "rate_limit_exceeded",
+              "daily_quota_exceeded",
+              "monthly_quota_exceeded",
+              "invalid_from_address",
+              "invalid_access",
+              "invalid_parameter",
+              "sending_paused",
+              "security_error",
+              "application_error",
+              "internal_server_error"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "IdResponse": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "ObjectRef": {
+        "type": "object",
+        "required": [
+          "object",
+          "id"
+        ],
+        "properties": {
+          "object": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "Deleted": {
+        "type": "object",
+        "required": [
+          "object",
+          "id",
+          "deleted"
+        ],
+        "properties": {
+          "object": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "deleted": {
+            "type": "boolean",
+            "const": true
+          }
+        }
+      },
+      "ScheduledAt": {
+        "type": "string",
+        "description": "ISO 8601 date-time or natural language such as \"in 1 hour\" or \"in 2 days\". At most 30 days ahead.",
+        "examples": [
+          "in 1 hour",
+          "2026-10-30T09:00:00Z"
+        ]
+      },
+      "Address": {
+        "type": "string",
+        "description": "An email address, optionally with a display name: `Acme <hello@acme.com>`.",
+        "examples": [
+          "Acme <hello@acme.com>"
+        ]
+      },
+      "AddressList": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/Address"
+          },
+          {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/Address"
+            }
+          }
+        ]
+      },
+      "Tag": {
+        "type": "object",
+        "required": [
+          "name",
+          "value"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "maxLength": 256
+          },
+          "value": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "maxLength": 256
+          }
+        }
+      },
+      "Attachment": {
+        "type": "object",
+        "required": [
+          "filename"
+        ],
+        "description": "Provide exactly one of `content` or `path`.",
+        "properties": {
+          "filename": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "content": {
+            "type": "string",
+            "description": "Base64-encoded file content."
+          },
+          "path": {
+            "type": "string",
+            "format": "uri",
+            "description": "A public URL fetched at send time."
+          },
+          "content_type": {
+            "type": "string",
+            "examples": [
+              "application/pdf"
+            ]
+          },
+          "content_id": {
+            "type": "string",
+            "description": "Content-ID for inline images (`cid:`)."
+          }
+        }
+      },
+      "SendEmailRequest": {
+        "type": "object",
+        "description": "Either `html` or `text` is required. `reply_to` is also accepted as `replyTo` and `scheduled_at` as `scheduledAt`.",
+        "required": [
+          "from",
+          "to",
+          "subject"
+        ],
+        "properties": {
+          "from": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "to": {
+            "$ref": "#/components/schemas/AddressList"
+          },
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 998
+          },
+          "cc": {
+            "$ref": "#/components/schemas/AddressList"
+          },
+          "bcc": {
+            "$ref": "#/components/schemas/AddressList"
+          },
+          "reply_to": {
+            "$ref": "#/components/schemas/AddressList"
+          },
+          "html": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/Attachment"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/Tag"
+            }
+          },
+          "scheduled_at": {
+            "$ref": "#/components/schemas/ScheduledAt"
+          },
+          "tenant_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Platform mode. Our tenant id or your `external_id`. Optional when the `from` domain belongs to a tenant; a conflict with the domain's tenant is a 422."
+          }
+        }
+      },
+      "EmailStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "scheduled",
+          "sent",
+          "delivered",
+          "delivery_delayed",
+          "bounced",
+          "complained",
+          "opened",
+          "clicked",
+          "canceled",
+          "failed",
+          "suppressed"
+        ]
+      },
+      "EmailSummary": {
+        "type": "object",
+        "required": [
+          "object",
+          "id",
+          "to",
+          "from",
+          "created_at",
+          "subject",
+          "last_event",
+          "tenant_id"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "email"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "from": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "bcc": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "cc": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "reply_to": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "last_event": {
+            "$ref": "#/components/schemas/EmailStatus"
+          },
+          "scheduled_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Tag"
+            }
+          },
+          "tenant_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The tenant this email was sent for",
+            "or null.": null
+          }
+        }
+      },
+      "Email": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/EmailSummary"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "html": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "EmailList": {
+        "type": "object",
+        "required": [
+          "object",
+          "has_more",
+          "data"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "list"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EmailSummary"
+            }
+          }
+        }
+      },
+      "CreateDomainRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "examples": [
+              "acme.com"
+            ],
+            "description": "Domain or subdomain you own. Lower-cased."
+          },
+          "region": {
+            "type": "string",
+            "description": "Accepted for compatibility. The region is chosen by the platform and returned on the domain."
+          },
+          "custom_return_path": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]{1,63}$",
+            "default": "send",
+            "description": "Subdomain used for the custom MAIL FROM (bounce handling and SPF)."
+          },
+          "tenant_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Platform mode. Make the domain tenant-owned (our tenant id or your `external_id`). Mail from it is attributed to that tenant."
+          }
+        }
+      },
+      "UpdateDomainRequest": {
+        "type": "object",
+        "properties": {
+          "open_tracking": {
+            "type": "boolean"
+          },
+          "click_tracking": {
+            "type": "boolean"
+          },
+          "tls": {
+            "type": "string",
+            "enum": [
+              "opportunistic",
+              "enforced"
+            ]
+          }
+        }
+      },
+      "DomainStatus": {
+        "type": "string",
+        "enum": [
+          "not_started",
+          "pending",
+          "verified",
+          "failed",
+          "temporary_failure"
+        ]
+      },
+      "DnsRecord": {
+        "type": "object",
+        "required": [
+          "record",
+          "name",
+          "type",
+          "ttl",
+          "status",
+          "value"
+        ],
+        "properties": {
+          "record": {
+            "type": "string",
+            "enum": [
+              "SPF",
+              "DKIM",
+              "DMARC",
+              "MX"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "description": "Host relative to the domain."
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "MX",
+              "TXT",
+              "CNAME"
+            ]
+          },
+          "ttl": {
+            "type": "string",
+            "examples": [
+              "Auto"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/DomainStatus"
+          },
+          "value": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "integer"
+          }
+        }
+      },
+      "Domain": {
+        "type": "object",
+        "required": [
+          "object",
+          "id",
+          "name",
+          "status",
+          "created_at",
+          "region",
+          "tenant_id",
+          "open_tracking",
+          "click_tracking"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "domain"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DomainStatus"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "region": {
+            "type": "string",
+            "examples": [
+              "eu-central-1"
+            ]
+          },
+          "tenant_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The tenant that owns the domain",
+            "or null for a team-level domain.": null
+          },
+          "open_tracking": {
+            "type": "boolean"
+          },
+          "click_tracking": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DomainWithRecords": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Domain"
+          },
+          {
+            "type": "object",
+            "required": [
+              "records",
+              "recommended_records"
+            ],
+            "properties": {
+              "records": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/DnsRecord"
+                }
+              },
+              "recommended_records": {
+                "type": "array",
+                "description": "Optional records that improve deliverability, such as DMARC.",
+                "items": {
+                  "$ref": "#/components/schemas/DnsRecord"
+                }
+              }
+            },
+            "examples": [
+              {
+                "records": [
+                  {
+                    "record": "DKIM",
+                    "name": "abc123._domainkey",
+                    "type": "CNAME",
+                    "ttl": "Auto",
+                    "status": "pending",
+                    "value": "abc123.dkim.amazonses.com"
+                  },
+                  {
+                    "record": "SPF",
+                    "name": "send",
+                    "type": "MX",
+                    "ttl": "Auto",
+                    "status": "pending",
+                    "value": "feedback-smtp.eu-central-1.amazonses.com",
+                    "priority": 10
+                  },
+                  {
+                    "record": "SPF",
+                    "name": "send",
+                    "type": "TXT",
+                    "ttl": "Auto",
+                    "status": "pending",
+                    "value": "\"v=spf1 include:amazonses.com ~all\""
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "DomainList": {
+        "type": "object",
+        "required": [
+          "object",
+          "has_more",
+          "data"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "list"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Domain"
+            }
+          }
+        }
+      },
+      "CreateApiKeyRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 50
+          },
+          "permission": {
+            "type": "string",
+            "enum": [
+              "full_access",
+              "sending_access"
+            ],
+            "default": "full_access"
+          },
+          "domain_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Restrict a `sending_access` key to one of your domains. Not allowed with `full_access`."
+          }
+        }
+      },
+      "ApiKey": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "prefix",
+          "permission",
+          "domain_id",
+          "last_used_at",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string",
+            "examples": [
+              "sp_live_Kj3n"
+            ],
+            "description": "First characters of the key",
+            "safe to display.": null
+          },
+          "permission": {
+            "type": "string",
+            "enum": [
+              "full_access",
+              "sending_access"
+            ]
+          },
+          "domain_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ApiKeyList": {
+        "type": "object",
+        "required": [
+          "object",
+          "has_more",
+          "data"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "list"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiKey"
+            }
+          }
+        }
+      },
+      "WebhookEventType": {
+        "type": "string",
+        "description": "Event names you can subscribe a webhook to.",
+        "enum": [
+          "email.sent",
+          "email.delivered",
+          "email.delivery_delayed",
+          "email.bounced",
+          "email.complained",
+          "email.opened",
+          "email.clicked",
+          "email.failed",
+          "email.scheduled",
+          "email.suppressed"
+        ]
+      },
+      "CreateWebhookRequest": {
+        "type": "object",
+        "required": [
+          "endpoint",
+          "events"
+        ],
+        "properties": {
+          "endpoint": {
+            "type": "string",
+            "format": "uri",
+            "description": "Public URL that receives POST requests. https is required in production."
+          },
+          "events": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/WebhookEventType"
+            }
+          }
+        }
+      },
+      "UpdateWebhookRequest": {
+        "type": "object",
+        "properties": {
+          "endpoint": {
+            "type": "string",
+            "format": "uri"
+          },
+          "events": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/WebhookEventType"
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "enabled",
+              "disabled"
+            ]
+          }
+        }
+      },
+      "Webhook": {
+        "type": "object",
+        "required": [
+          "object",
+          "id",
+          "endpoint",
+          "events",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "webhook"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "endpoint": {
+            "type": "string",
+            "format": "uri"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebhookEventType"
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "enabled",
+              "disabled"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "WebhookWithSecret": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Webhook"
+          },
+          {
+            "type": "object",
+            "required": [
+              "signing_secret"
+            ],
+            "properties": {
+              "signing_secret": {
+                "type": "string",
+                "examples": [
+                  "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"
+                ],
+                "description": "Used to verify the webhook signature."
+              }
+            }
+          }
+        ]
+      },
+      "WebhookList": {
+        "type": "object",
+        "required": [
+          "object",
+          "has_more",
+          "data"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "list"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Webhook"
+            }
+          }
+        }
+      },
+      "CreateTenantRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "external_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Your own id for the customer. Unique per account; accepted wherever a tenant id is."
+          },
+          "daily_limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "description": "Max recipients per day for this tenant. Omit or null for no cap."
+          }
+        }
+      },
+      "UpdateTenantRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "external_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "daily_limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "description": "Null removes the cap."
+          }
+        }
+      },
+      "Tenant": {
+        "type": "object",
+        "required": [
+          "object",
+          "id",
+          "name",
+          "external_id",
+          "daily_limit",
+          "status",
+          "paused_reason",
+          "created_at"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "tenant"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "external_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "daily_limit": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "paused"
+            ]
+          },
+          "paused_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the tenant is paused (manual or reputation guard). Null when active."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "examples": [
+          {
+            "object": "tenant",
+            "id": "0198a1c2-7b3e-7a41-9d52-5f6c1e0b8a11",
+            "name": "Acme Inc",
+            "external_id": "cust_123",
+            "daily_limit": 500,
+            "status": "active",
+            "paused_reason": null,
+            "created_at": "2026-10-23T09:00:00.000Z"
+          }
+        ]
+      },
+      "TenantList": {
+        "type": "object",
+        "required": [
+          "object",
+          "has_more",
+          "data"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "list"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Tenant"
+            }
+          }
+        }
+      },
+      "WebhookEmailData": {
+        "type": "object",
+        "description": "Fields present in `data` for every event.",
+        "required": [
+          "email_id",
+          "from",
+          "to",
+          "subject",
+          "created_at"
+        ],
+        "properties": {
+          "email_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "subject": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the email was created (the event time is the envelope's `created_at`)."
+          },
+          "broadcast_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Present for broadcast emails."
+          },
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Present when the email belongs to a tenant."
+          },
+          "tags": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The email's tags as an object of name to value. Absent when the email has none."
+          }
+        }
+      },
+      "WebhookEvent": {
+        "description": "The JSON body SpacePost POSTs to a webhook, identical to Resend's. Discriminated by `type`.\n`data` always has the `WebhookEmailData` fields plus the event-specific object listed below.\n",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/EmailSentEvent"
+          },
+          {
+            "$ref": "#/components/schemas/EmailDeliveredEvent"
+          },
+          {
+            "$ref": "#/components/schemas/EmailDeliveryDelayedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/EmailBouncedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/EmailComplainedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/EmailOpenedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/EmailClickedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/EmailFailedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/EmailScheduledEvent"
+          },
+          {
+            "$ref": "#/components/schemas/EmailSuppressedEvent"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "type",
+          "mapping": {
+            "email.sent": "#/components/schemas/EmailSentEvent",
+            "email.delivered": "#/components/schemas/EmailDeliveredEvent",
+            "email.delivery_delayed": "#/components/schemas/EmailDeliveryDelayedEvent",
+            "email.bounced": "#/components/schemas/EmailBouncedEvent",
+            "email.complained": "#/components/schemas/EmailComplainedEvent",
+            "email.opened": "#/components/schemas/EmailOpenedEvent",
+            "email.clicked": "#/components/schemas/EmailClickedEvent",
+            "email.failed": "#/components/schemas/EmailFailedEvent",
+            "email.scheduled": "#/components/schemas/EmailScheduledEvent",
+            "email.suppressed": "#/components/schemas/EmailSuppressedEvent"
+          }
+        },
+        "examples": [
+          {
+            "type": "email.bounced",
+            "created_at": "2026-10-23T09:00:05.000Z",
+            "data": {
+              "email_id": "0198a1c2-7b3e-7a41-9d52-5f6c1e0b8a11",
+              "from": "Acme <hello@acme.com>",
+              "to": [
+                "user@example.com"
+              ],
+              "subject": "Welcome",
+              "created_at": "2026-10-23T09:00:00.000Z",
+              "tenant_id": "0198a1c2-8a00-7a41-9d52-5f6c1e0b8a99",
+              "tags": {
+                "category": "welcome"
+              },
+              "bounce": {
+                "type": "Permanent",
+                "subType": "General",
+                "message": "smtp; 550 5.1.1 user unknown"
+              }
+            }
+          }
+        ]
+      },
+      "EmailSentEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/WebhookEnvelope"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "email.sent"
+              }
+            }
+          }
+        ]
+      },
+      "EmailDeliveredEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/WebhookEnvelope"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "email.delivered"
+              }
+            }
+          }
+        ]
+      },
+      "EmailDeliveryDelayedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/WebhookEnvelope"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "email.delivery_delayed"
+              }
+            }
+          }
+        ]
+      },
+      "EmailComplainedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/WebhookEnvelope"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "email.complained"
+              }
+            }
+          }
+        ]
+      },
+      "EmailScheduledEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/WebhookEnvelope"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "email.scheduled"
+              }
+            }
+          }
+        ]
+      },
+      "EmailBouncedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/WebhookEnvelope"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "email.bounced"
+              },
+              "data": {
+                "type": "object",
+                "properties": {
+                  "bounce": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "examples": [
+                          "Permanent"
+                        ]
+                      },
+                      "subType": {
+                        "type": "string",
+                        "examples": [
+                          "General"
+                        ]
+                      },
+                      "message": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "EmailOpenedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/WebhookEnvelope"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "email.opened"
+              },
+              "data": {
+                "type": "object",
+                "properties": {
+                  "open": {
+                    "type": "object",
+                    "properties": {
+                      "ipAddress": {
+                        "type": "string"
+                      },
+                      "userAgent": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "EmailClickedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/WebhookEnvelope"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "email.clicked"
+              },
+              "data": {
+                "type": "object",
+                "properties": {
+                  "click": {
+                    "type": "object",
+                    "properties": {
+                      "link": {
+                        "type": "string",
+                        "format": "uri"
+                      },
+                      "ipAddress": {
+                        "type": "string"
+                      },
+                      "userAgent": {
+                        "type": "string"
+                      },
+                      "timestamp": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "EmailFailedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/WebhookEnvelope"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "email.failed"
+              },
+              "data": {
+                "type": "object",
+                "required": [
+                  "failed"
+                ],
+                "properties": {
+                  "failed": {
+                    "type": "object",
+                    "required": [
+                      "reason"
+                    ],
+                    "properties": {
+                      "reason": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "EmailSuppressedEvent": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/WebhookEnvelope"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "email.suppressed"
+              },
+              "data": {
+                "type": "object",
+                "required": [
+                  "suppressed"
+                ],
+                "properties": {
+                  "suppressed": {
+                    "type": "object",
+                    "required": [
+                      "recipients",
+                      "reason"
+                    ],
+                    "properties": {
+                      "recipients": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "reason": {
+                        "type": "string",
+                        "enum": [
+                          "suppression_list",
+                          "recipient_domain_does_not_accept_mail"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "WebhookEnvelope": {
+        "type": "object",
+        "required": [
+          "type",
+          "created_at",
+          "data"
+        ],
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/WebhookEventType"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the event happened."
+          },
+          "data": {
+            "$ref": "#/components/schemas/WebhookEmailData"
+          }
+        }
+      },
+      "Audience": {
+        "type": "object",
+        "required": [
+          "object",
+          "id",
+          "name",
+          "created_at"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "audience"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AudienceList": {
+        "type": "object",
+        "required": [
+          "object",
+          "has_more",
+          "data"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "list"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Audience"
+            }
+          }
+        }
+      },
+      "CreateContactRequest": {
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "first_name": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "last_name": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "unsubscribed": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "UpdateContactRequest": {
+        "type": "object",
+        "properties": {
+          "first_name": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "last_name": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "unsubscribed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Contact": {
+        "type": "object",
+        "required": [
+          "object",
+          "id",
+          "email",
+          "first_name",
+          "last_name",
+          "created_at",
+          "unsubscribed"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "contact"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "first_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "unsubscribed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ContactList": {
+        "type": "object",
+        "required": [
+          "object",
+          "has_more",
+          "data"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "list"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Contact"
+            }
+          }
+        }
+      },
+      "CreateBroadcastRequest": {
+        "type": "object",
+        "required": [
+          "audience_id",
+          "from",
+          "subject"
+        ],
+        "properties": {
+          "audience_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "from": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 998
+          },
+          "reply_to": {
+            "$ref": "#/components/schemas/AddressList"
+          },
+          "preview_text": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "html": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Internal name",
+            "not shown to recipients.": null
+          }
+        }
+      },
+      "UpdateBroadcastRequest": {
+        "type": "object",
+        "description": "Any field of the create request; only drafts can be updated.",
+        "properties": {
+          "audience_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "from": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 998
+          },
+          "reply_to": {
+            "$ref": "#/components/schemas/AddressList"
+          },
+          "preview_text": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "html": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 100
+          }
+        }
+      },
+      "Broadcast": {
+        "type": "object",
+        "required": [
+          "object",
+          "id",
+          "audience_id",
+          "from",
+          "subject",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "broadcast"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "audience_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "from": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "reply_to": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "preview_text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "html": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "queued",
+              "sending",
+              "sent",
+              "canceled",
+              "failed"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "scheduled_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "BroadcastList": {
+        "type": "object",
+        "required": [
+          "object",
+          "has_more",
+          "data"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "list"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Broadcast"
+            }
+          }
+        }
+      },
+      "Suppression": {
+        "type": "object",
+        "required": [
+          "object",
+          "id",
+          "email",
+          "reason",
+          "created_at"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "suppression"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "bounce",
+              "complaint",
+              "manual",
+              "unsubscribe"
+            ]
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human-readable cause, e.g. \"Hard bounce (NoEmail)\" or \"3 soft bounces in 30 days (MailboxFull)\".",
+            "examples": [
+              "Hard bounce (NoEmail)"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SuppressionList": {
+        "type": "object",
+        "required": [
+          "object",
+          "has_more",
+          "data"
+        ],
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "list"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Suppression"
+            }
+          }
+        }
+      }
+    }
+  }
+}

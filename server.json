@@ -1,0 +1,57 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "dev.spacepost/mcp",
+  "title": "SpacePost",
+  "description": "Send email and manage domains, contacts and webhooks on SpacePost, the Resend-compatible email API.",
+  "websiteUrl": "https://docs.spacepost.dev/tools/mcp/",
+  "icons": [
+    { "src": "https://spacepost.dev/brand/app-icon-512.png", "mimeType": "image/png", "sizes": ["512x512"] },
+    { "src": "https://spacepost.dev/brand/app-icon-128.png", "mimeType": "image/png", "sizes": ["128x128"] }
+  ],
+  "version": "0.2.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@spacepost/mcp",
+      "version": "0.2.1",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "SPACEPOST_API_KEY",
+          "description": "SpacePost API key (sp_live_...), created in the SpacePost dashboard under API keys. A sending_access key limits the server to sending.",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "SPACEPOST_READ_ONLY",
+          "description": "Set to true to expose only read tools (GET endpoints).",
+          "isRequired": false,
+          "format": "boolean"
+        },
+        {
+          "name": "SPACEPOST_TOOLSETS",
+          "description": "Comma-separated API areas to expose, e.g. emails,domains.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "SPACEPOST_PERMISSION",
+          "description": "Set to sending_access to expose only the tools a sending_access key can call.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "SPACEPOST_DEFAULT_FROM",
+          "description": "Default sender, e.g. Acme <hello@acme.com>, used when a send omits from.",
+          "isRequired": false,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "name": "@spacepost/mcp",
+  "mcpName": "dev.spacepost/mcp",
+  "version": "0.2.1",
+  "description": "SpacePost MCP server: every SpacePost API endpoint as an MCP tool, generated from the OpenAPI spec",
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://github.com/404-studio/spacepost-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/404-studio/spacepost-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/404-studio/spacepost-mcp/issues",
+    "email": "support@spacepost.dev"
+  },
+  "author": "Studio 404 d.o.o. <support@spacepost.dev>",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "email",
+    "resend",
+    "spacepost"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "spacepost-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "generate": "bun scripts/generate-spec.ts",
+    "build": "rm -rf dist && bun build src/index.ts --outfile dist/index.js --target node && chmod +x dist/index.js",
+    "typecheck": "tsc -p .",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.9"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

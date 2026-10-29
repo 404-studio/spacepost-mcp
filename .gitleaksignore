@@ -1,0 +1,5 @@
+# Placeholder keys, not credentials (the API rejects both as invalid_api_key):
+# - the example token in the API-key creation response of the public OpenAPI document
+# - the fake key used by the test fixtures
+test/server.test.ts:generic-api-key:10
+src/generated/openapi.json:generic-api-key:765
