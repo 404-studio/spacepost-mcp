@@ -74,6 +74,16 @@ claude mcp add spacepost -e SPACEPOST_API_KEY=sp_live_... -e SPACEPOST_DEFAULT_F
 }
 ```
 
+### Docker
+
+```bash
+docker build -t spacepost-mcp .
+docker run -i --rm -e SPACEPOST_API_KEY=sp_live_... spacepost-mcp
+```
+
+The image builds the server from this repo's source and runs it over stdio as a non-root user. The key is read from the
+environment at runtime; nothing is baked into the image.
+
 ## How tools are built
 
 - Name: `operationId` in snake_case (`sendEmail` → `send_email`, `getBroadcastReadiness` → `get_broadcast_readiness`). The 12

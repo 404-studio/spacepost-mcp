@@ -1,0 +1,5 @@
+# Only package.json, bun.lock and src/ are needed to build the image.
+*
+!package.json
+!bun.lock
+!src/
